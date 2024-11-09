@@ -1,0 +1,71 @@
+# Ignore build output directories
+/Debug/
+/Release/
+
+# Ignore object files and dependency files
+*.obj
+*.d
+*.d_raw
+
+# Ignore assembler listings and map files
+*.lst
+*.map
+
+# Ignore binary and executable files
+*.out
+*.hex
+*.bin
+*.lib
+*.elf
+
+# Ignore temporary and backup files
+*.tmp
+*.temp
+*.bak
+*~
+
+# Ignore CCS generated files
+*.cmd
+*.pp
+*.ppv
+*.cproject
+*.project
+.settings/
+.metadata/
+*ccsproject*
+
+# Ignore log files
+*.log
+
+# Ignore Eclipse-specific files
+*.launch
+*.sc
+*.pydevproject
+
+# Ignore system files
+.DS_Store
+Thumbs.db
+
+# Ignore code analysis and coverage files
+*.gcno
+*.gcda
+
+# Ignore other IDEs' files
+.idea/
+*.iml
+
+# Ignore user-specific files
+*.user
+*.userprefs
+
+# Ignore build scripts and generated makefiles
+makefile
+makefile.*
+
+# Ignore test and debug output
+/test_output/
+debug.log
+
+# Ignore cache and index files
+.cache/
+index.db
