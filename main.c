@@ -1,5 +1,6 @@
 #include <rf430frl152h.h>
 #include <rf13m_rom_config.h>
+#include <rf13m_rom_patch.h>
 #include <stdint.h>
 #include "event_queue.h"
 
@@ -8,14 +9,17 @@ EventQueue event_queue;
 void device_init(void);
 void process_event(const Event *event);
 void start_timer(uint16_t duration_ms);
+void stop_watchdog_timer();
+void wait_for_event();
+
+void userCustomCommand();
 
 
 int main(void)
 {
-	WDTCTL = WDTPW | WDTHOLD;	// stop watchdog timer
 	
+    stop_watchdog_timer();
 	rf13m_setup();
-
     init_iso15693(CLEAR_BLOCK_LOCKS);  // clear all block locks
     device_init();
 	event_queue_init(&event_queue);
@@ -23,29 +27,42 @@ int main(void)
 	P1DIR |= BIT0 | BIT1;
 	P1OUT |= BIT0 | BIT1;
 
-	// Configure P1.3 to output ACLK
-	P1DIR |= BIT3;         // Set P1.3 as output
-	P1SEL0 |= BIT3;        // Set P1.3 function select bits
-	P1SEL1 |= BIT3;        // Select quaternary function (ACLK output)
+	// Configure P1.3 to output ACLK for debugging purposes to figure out what's going on with clocks
+	//P1DIR |= BIT3;         // Set P1.3 as output
+	//P1SEL0 |= BIT3;        // Set P1.3 function select bits
+	//P1SEL1 |= BIT3;        // Select quaternary function (ACLK output)
 
-	start_timer(100);
+	//start_timer(100);
 
 	while (1) {
+
+	    wait_for_event();
+
         Event event;
-        if(event_queue_get(&event_queue, &event)) {
+        while(event_queue_get(&event_queue, &event)) {
             process_event(&event);
         }
 
-        __bis_SR_register(LPM3_bits | GIE);  // Enter LPM3
     }
+}
+
+/**
+ * Enter low power mode until interrupt occurs
+ */
+void wait_for_event() {
+    __bis_SR_register(LPM0_bits | GIE);  // Enter LPM3
+}
+
+void stop_watchdog_timer() {
+    WDTCTL = WDTPW | WDTHOLD;   // stop watchdog timer
 }
 
 void device_init(void)
 {
-//  P1SEL0 = 0xF0; //keep JTAG
-//  P1SEL1 = 0xF0; //keep JTAG
-    P1SEL0 = 0x00; //no JTAG
-    P1SEL1 = 0x00; //no JTAG
+    P1SEL0 = 0xF0; //keep JTAG
+    P1SEL1 = 0xF0; //keep JTAG
+//    P1SEL0 = 0x00; //no JTAG
+//    P1SEL1 = 0x00; //no JTAG
 
     P1DIR &= ~0xEF;
     P1REN = 0;
@@ -92,9 +109,8 @@ __interrupt void Timer_A_ISR(void) {
     event_queue_put(&event_queue, &event);
 
     // Exit LPM3
-    __bic_SR_register_on_exit(LPM3_bits);
+    __bic_SR_register_on_exit(LPM0_bits);
 }
-
 
 
 //#pragma CODE_SECTION(RF13M_ISR, ".fram_driver_code")  // comment this line for using ROM's RF13M ISR, uncomment next one, see .cmd file for details
@@ -111,14 +127,26 @@ __interrupt void RF13M_ISR(void)
 
 // Process events from the event queue
 void process_event(const Event *event) {
+    int i=0;
     switch (event->type) {
         case EVENT_NFC:
+            // Delayed response works with NFC Tools testing on Android
+            // Would make it easier to indicate when display update is complete, don't have to poll
+            RF13MTXF_L = 0x03;
             //process_nfc_event(event->data.digit);
+
+            // Test pattern to see on oscilloscope that we made it here
+            for (i=0; i<50; i++) {
+                P1OUT ^= BIT0;
+                __delay_cycles(100000);
+            }
+
+            //start_timer(100);
             break;
         case EVENT_TIMER:
             //process_timer_event();
-            P1OUT ^= BIT0;
-            start_timer(100);
+            //P1OUT ^= BIT0;
+            //start_timer(100);
             break;
         default:
             // Unknown event type
@@ -126,4 +154,114 @@ void process_event(const Event *event) {
     }
 
 }
+
+/*******************************Driver/Patch Table Format*******************************/
+/*
+ *   Address    Value           Comment
+ *
+ *   0xFFCE     0xCECE          The driver table start key, always same address (0xFFCE)
+ *
+ *   0xFFCC     0x1B00          The command ID of the digital sensor sampling function
+ *   0xFFCA     Address         The address of the driver sensor sampling function in FRAM
+ *
+ *   0xFFC8     0x0100          The digital sensor function driver initialization function
+ *   0xFFC6     Address         The address of the driver function initialization in FRAM
+ *
+ *
+ *   Optional:
+ *   0xFFC4     ID              Another driver/patch function ID
+ *   0xFFC2     Address         Address of the function above
+ *
+ *      *          *            Pairs
+ *      *          *
+ *
+ *   End optional
+ *
+ *   0xFFC4     0xCECE          Ending key
+ *****************************************************************************************/
+  /* If start key not present in starting location, table does not exist
+   *  If it does, a ROM routine will parse it and setup the calls to be made to the
+   *  appropriate address when needed.
+   */
+ /*****************************************************************************************/
+
+//Start key
+#pragma RETAIN(START_KEY);
+#pragma location = DRIVER_TABLE_START
+const uint16_t START_KEY = DRIVER_TABLE_KEY;
+
+////Custom Command
+#pragma RETAIN(CustomCommandID);
+#pragma location = CUSTOM_COMMAND                                                       // the location of the command ID
+const uint16_t  CustomCommandID = USER_CUSTOM_COMMAND_ID;                                  // the function identifier
+
+// Function address
+#pragma RETAIN(CustomCommandAddress);
+#pragma location = CUSTOM_COMMAND_ADDR                                                      // the location of the address
+const DriverFunction CustomCommandAddress = (DriverFunction)&userCustomCommand;         // the location the function is in
+
+//Ending key
+#pragma RETAIN(END_KEY);
+#pragma location = DRIVER_TABLE_END
+const uint16_t END_KEY = DRIVER_TABLE_KEY;
+
+
+/**************************************************************************************************************************************************
+*  userCustomCommand
+***************************************************************************************************************************************************
+*
+* Brief : This function is called by the RF stack whenever a custom command by its ID number is transmitted
+*
+* Param[in] :   None
+*
+* Param[out]:   None
+*
+* Return        None
+*
+* This is an example only, and the user if free to modify as needed.
+*
+* Operation: Example with TRF7970AEVM
+* Use Test tab to send following sequence: 18 02 AA 07 10 10
+* 18 - TRF7970AEVM Host command (omit for other readers - not sent out over RF)
+* 02 - High speed mode selection (start of actual RF packet)
+* AA - The actual custom command
+* 07 - TI Manufacturer ID (need by this IC)
+* 01 - Set Error LED to on  (0x00 to be off)
+**************************************************************************************************************************************************/
+// RFM13 ISR context
+void userCustomCommand()
+{
+    uint8_t control;
+
+    if( RF13MFIFOFL_L == CRC_LENGTH_IN_BUFFER + DATA_IN_LENGTH)         // CRC_LENGTH + 1 byte expected
+    {
+        control = RF13MRXF_L;  // pull one byte from the recieve FIFO
+
+        Event event;
+        event.type = EVENT_NFC;
+        event.data = control;
+
+        event_queue_put(&event_queue, &event);
+
+        //Device has 32 byte RX FIFO and 32 byte TX FIFO, this includes the CRC bytes
+        //use RF13MRXF to receive two bytes
+        //use RF13MRXF_L to receive one byte
+        //to receive more than one byte simply continue to read the RF13MRXF_L register.
+        //The limit is 32 bytes, but in reality it is less due to protocol overhead
+
+        // Instead of immediate return here, wait until display has been updated to indicate success
+        //RF13MTXF_L = 0x03;      // no error, send out
+        //To transmit more than one byte repeatedly write data into RF13MTXF_L for each data byte/word and it will go into the FIFO to be transmitted
+
+        // HACK: In order to get CPU out of low power power mode for the main loop to run we need to trigger a timer interrupt
+        // This patch function is called by the RFM13 ISR but since this is a callback and not within the actual ISR
+        // we can't use __bic_SR_register_on_exit(LPM0_bits); so workaround is to setup the timer to go off
+        start_timer(1);
+    }
+    else
+    {
+       RF13MTXF_L = 0x1;    // an error response
+    }
+}
+
 
