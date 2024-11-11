@@ -13,8 +13,8 @@ void init_i2c(void) {
     UCB0CTLW0 |= UCSWRST;
     // Configure as I2C master, synchronous mode, SMCLK
     UCB0CTLW0 |= UCMODE_3 | UCMST | UCSSEL__SMCLK;
-    // Set baud rate for ~100kHz
-    UCB0BRW = 10;
+    // Set baud rate for ~100kHz; SMCLK is 2 MHz from the looks of it
+    UCB0BRW = 20;
     // Set slave address
     UCB0I2CSA = TCAL9539_ADDRESS;
 
