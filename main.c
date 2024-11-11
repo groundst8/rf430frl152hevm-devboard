@@ -1,6 +1,7 @@
 #include <rf430frl152h.h>
 #include <rf13m_rom_config.h>
 #include <rf13m_rom_patch.h>
+#include <tcal9539.h>
 #include <stdint.h>
 #include "event_queue.h"
 
@@ -23,9 +24,16 @@ int main(void)
     init_iso15693(CLEAR_BLOCK_LOCKS);  // clear all block locks
     device_init();
 	event_queue_init(&event_queue);
+	init_i2c();
 
-	P1DIR |= BIT0 | BIT1;
-	P1OUT |= BIT0 | BIT1;
+	//P1DIR |= BIT0 | BIT1;
+	//P1OUT |= BIT0 | BIT1;
+
+	// Set Port 0 as outputs
+	write_tcal9539_register(CONFIG_PORT0_REG, 0x00);
+
+    // Initialize Port 0 outputs to low
+	write_tcal9539_register(OUTPUT_PORT0_REG, 0x00);
 
 	// Configure P1.3 to output ACLK for debugging purposes to figure out what's going on with clocks
 	//P1DIR |= BIT3;         // Set P1.3 as output
@@ -128,6 +136,8 @@ __interrupt void RF13M_ISR(void)
 // Process events from the event queue
 void process_event(const Event *event) {
     int i=0;
+    uint8_t port0_output = 0x00;
+
     switch (event->type) {
         case EVENT_NFC:
             // Delayed response works with NFC Tools testing on Android
@@ -136,8 +146,15 @@ void process_event(const Event *event) {
             //process_nfc_event(event->data.digit);
 
             // Test pattern to see on oscilloscope that we made it here
+            //for (i=0; i<50; i++) {
+            //    P1OUT ^= BIT0;
+            //    __delay_cycles(100000);
+            //}
+
+
             for (i=0; i<50; i++) {
-                P1OUT ^= BIT0;
+                port0_output ^= BIT1;
+                write_tcal9539_register(OUTPUT_PORT0_REG, port0_output);
                 __delay_cycles(100000);
             }
 
