@@ -32,6 +32,11 @@ void write_tcal9539_register(uint8_t reg, uint8_t data) {
 
     // Start condition and send register address
     UCB0CTLW0 |= UCTR | UCTXSTT;
+
+    // Wait for START condition and slave address transmission to complete
+    while (UCB0CTLW0 & UCTXSTT);
+
+    // Wait for TX buffer to be ready for the register address
     while (!(UCB0IFG & UCTXIFG0));
     UCB0TXBUF = reg;
 
