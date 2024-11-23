@@ -5,6 +5,14 @@
 #include <stdint.h>
 #include "event_queue.h"
 
+// Error codes for NFC responses
+#define ERROR_UPDATE_IN_PROGRESS 1
+#define ERROR_UNEXPECTED_NFC_LENGTH 2
+
+// Global variables
+volatile bool update_in_progress = false;
+
+
 EventQueue event_queue;
 
 void device_init(void);
@@ -12,8 +20,45 @@ void process_event(const Event *event);
 void start_timer(uint16_t duration_ms);
 void stop_watchdog_timer();
 void wait_for_event();
+void delay(uint16_t duration_ms);
+void wakeup();
 
 void userCustomCommand();
+
+void update_display(uint8_t number);
+void write_ones_digit(uint8_t segments);
+void write_tens_digit(uint8_t segments);
+
+
+// 7-segment encoding lookup table
+// Each element represents the segments needed to display a digit
+//     a
+//    ___
+// f | g | b
+//    ---
+// e |   | c
+//    ---
+// z   d
+// |
+// Port Bits: gfedcba (z is common electrode)
+const uint8_t seven_segment_table[10] = {
+  0b0111111,  // 0
+  0b0000110,  // 1
+  0b1011011,  // 2
+  0b1001111,  // 3
+  0b1100110,  // 4
+  0b1101101,  // 5
+  0b1111101,  // 6
+  0b0000111,  // 7
+  0b1111111,  // 8
+  0b1101111   // 9
+};
+
+// oF to represent overflow
+const uint8_t seven_segment_oF[2] = {
+  0b1011100,  // o
+  0b1110001,  // F
+};
 
 
 int main(void)
@@ -26,21 +71,10 @@ int main(void)
 	event_queue_init(&event_queue);
 	init_i2c();
 
-	//P1DIR |= BIT0 | BIT1;
-	//P1OUT |= BIT0 | BIT1;
-
-	// Set Port 0 as outputs
-	write_tcal9539_register(CONFIG_PORT0_REG, 0x00);
-
-    // Initialize Port 0 outputs to low
-	write_tcal9539_register(OUTPUT_PORT0_REG, 0x00);
-
 	// Configure P1.3 to output ACLK for debugging purposes to figure out what's going on with clocks
 	//P1DIR |= BIT3;         // Set P1.3 as output
 	//P1SEL0 |= BIT3;        // Set P1.3 function select bits
 	//P1SEL1 |= BIT3;        // Select quaternary function (ACLK output)
-
-	//start_timer(100);
 
 	while (1) {
 
@@ -90,12 +124,22 @@ void device_init(void)
 
 
 // Start timer for the specified duration in milliseconds
-void start_timer(uint16_t duration_ms) {
+void delay(uint16_t duration_ms) {
     // seems to be 64kHz, not sure why
 
     // Configure Timer_A
     TA0CCTL0 = CCIE;                           // Enable interrupt
     TA0CCR0 = duration_ms * 64;                // ACLK is sourced from VLO at 64 kHz?
+    TA0CTL = TASSEL__ACLK | MC__UP | TACLR;    // ACLK, Up mode, clear TAR
+
+    __bis_SR_register(LPM0_bits | GIE);
+
+}
+
+void wakeup() {
+    // Configure Timer_A
+    TA0CCTL0 = CCIE;                           // Enable interrupt
+    TA0CCR0 = 64;                // ACLK is sourced from VLO at 64 kHz?
     TA0CTL = TASSEL__ACLK | MC__UP | TACLR;    // ACLK, Up mode, clear TAR
 }
 
@@ -107,14 +151,10 @@ __interrupt void Timer_A_ISR(void) {
     TA0CCTL0 &= ~CCIE;
     TA0CCTL0 &= ~CCIFG;  // Clear interrupt flag
 
-    //P1OUT ^= BIT1;
-
     // Create a timer event
-    Event event;
-    event.type = EVENT_TIMER;
-    // Add any additional data if necessary
-
-    event_queue_put(&event_queue, &event);
+    //Event event;
+    //event.type = EVENT_TIMER;
+    //event_queue_put(&event_queue, &event);
 
     // Exit LPM3
     __bic_SR_register_on_exit(LPM0_bits);
@@ -135,41 +175,88 @@ __interrupt void RF13M_ISR(void)
 
 // Process events from the event queue
 void process_event(const Event *event) {
-    int i=0;
-    uint8_t port0_output = 0x00;
 
     switch (event->type) {
         case EVENT_NFC:
             // Delayed response works with NFC Tools testing on Android
             // Would make it easier to indicate when display update is complete, don't have to poll
             RF13MTXF_L = 0x03;
-            //process_nfc_event(event->data.digit);
-
-            // Test pattern to see on oscilloscope that we made it here
-            //for (i=0; i<50; i++) {
-            //    P1OUT ^= BIT0;
-            //    __delay_cycles(100000);
-            //}
-
-
-            for (i=0; i<50; i++) {
-                port0_output ^= BIT1;
-                write_tcal9539_register(OUTPUT_PORT0_REG, port0_output);
-                __delay_cycles(100000);
-            }
-
-            //start_timer(100);
+            update_display(event->data);
             break;
         case EVENT_TIMER:
-            //process_timer_event();
-            //P1OUT ^= BIT0;
-            //start_timer(100);
-            break;
         default:
             // Unknown event type
             break;
     }
 
+}
+
+void update_display(uint8_t number) {
+
+    // could potentially represent 100 as 00 but for now will cap at 99
+    if (number > 99) {
+       // write segments as oF to indicate overflow
+       write_ones_digit(seven_segment_oF[1]);
+       write_tens_digit(seven_segment_oF[0]);
+
+    } else {
+       uint8_t tens = number / 10;      // Extract tens digit
+       uint8_t ones = number % 10;      // Extract ones digit
+
+       uint8_t tens_code = seven_segment_table[tens];  // Lookup segment code for tens digit
+       uint8_t ones_code = seven_segment_table[ones];  // Lookup segment code for ones digit
+
+       write_tens_digit(tens_code);
+       write_ones_digit(ones_code);
+    }
+}
+
+// write segments sequentially, no refresh just full switch everything for now
+void write_ones_digit(uint8_t segments) {
+
+    // common electrode is on PORT0
+    //set com to output, everything else to input
+    write_tcal9539_register(CONFIG_PORT0_REG, 0x7F);
+
+    //clear
+    //set to outputs
+    write_tcal9539_register(CONFIG_PORT1_REG, 0x00);
+    //common electrode high, everything else low for -1.5V across segments
+    write_tcal9539_register(OUTPUT_PORT0_REG, 0x80);
+    write_tcal9539_register(OUTPUT_PORT1_REG, 0x00);
+    delay(500);
+
+    // write all
+    //common electrode low, segments high for 1.5V across segments
+    write_tcal9539_register(OUTPUT_PORT0_REG, 0x00);
+    //set segments as outputs
+    write_tcal9539_register(CONFIG_PORT1_REG, ~segments);
+    //common electrode low, segments high for 1.5V across segments
+    write_tcal9539_register(OUTPUT_PORT1_REG, segments);
+    delay(500);
+
+    // after updates put into input mode (high impedance)
+    write_tcal9539_register(CONFIG_PORT1_REG, 0xFF);
+    write_tcal9539_register(CONFIG_PORT0_REG, 0xFF);
+
+}
+
+void write_tens_digit(uint8_t segments) {
+    //clear
+    //set to outputs
+    write_tcal9539_register(CONFIG_PORT0_REG, 0x00);
+    //common electrode high, everything else low for -1.5V across segments
+    write_tcal9539_register(OUTPUT_PORT0_REG, 0x80);
+    delay(500);
+
+    // write all
+    //set common electrode and segments as outputs
+    write_tcal9539_register(CONFIG_PORT0_REG, ~(BIT7 | segments));
+    //common electrode low, segments high for 1.5V across segments
+    write_tcal9539_register(OUTPUT_PORT0_REG, segments);
+    delay(500);
+    // after updates put into input mode (high impedance)
+    write_tcal9539_register(CONFIG_PORT0_REG, 0xFF);
 }
 
 /*******************************Driver/Patch Table Format*******************************/
@@ -252,12 +339,12 @@ void userCustomCommand()
 
     if( RF13MFIFOFL_L == CRC_LENGTH_IN_BUFFER + DATA_IN_LENGTH)         // CRC_LENGTH + 1 byte expected
     {
-        control = RF13MRXF_L;  // pull one byte from the recieve FIFO
+
+        control = RF13MRXF_L;  // pull one byte from the receive FIFO
 
         Event event;
         event.type = EVENT_NFC;
         event.data = control;
-
         event_queue_put(&event_queue, &event);
 
         //Device has 32 byte RX FIFO and 32 byte TX FIFO, this includes the CRC bytes
@@ -273,11 +360,13 @@ void userCustomCommand()
         // HACK: In order to get CPU out of low power power mode for the main loop to run we need to trigger a timer interrupt
         // This patch function is called by the RFM13 ISR but since this is a callback and not within the actual ISR
         // we can't use __bic_SR_register_on_exit(LPM0_bits); so workaround is to setup the timer to go off
-        start_timer(1);
+        //RF13MTXF_L = 0x01;
+        wakeup();
+
     }
     else
     {
-       RF13MTXF_L = 0x1;    // an error response
+       RF13MTXF_L = ERROR_UNEXPECTED_NFC_LENGTH;    // an error response
     }
 }
 

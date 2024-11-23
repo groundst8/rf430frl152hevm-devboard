@@ -15,6 +15,9 @@
 #define CONFIG_PORT0_REG 0x06
 #define OUTPUT_PORT0_REG 0x02
 
+#define CONFIG_PORT1_REG 0x07
+#define OUTPUT_PORT1_REG 0x03
+
 void init_i2c();
 void write_tcal9539_register(uint8_t register, uint8_t data);
 
