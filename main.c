@@ -28,6 +28,7 @@ void userCustomCommand();
 void update_display(uint8_t number);
 void write_ones_digit(uint8_t segments);
 void write_tens_digit(uint8_t segments);
+void clear_tens_digit();
 
 
 // 7-segment encoding lookup table
@@ -196,9 +197,8 @@ void update_display(uint8_t number) {
     // could potentially represent 100 as 00 but for now will cap at 99
     if (number > 99) {
        // write segments as oF to indicate overflow
-       write_ones_digit(seven_segment_oF[1]);
        write_tens_digit(seven_segment_oF[0]);
-
+       write_ones_digit(seven_segment_oF[1]);
     } else {
        uint8_t tens = number / 10;      // Extract tens digit
        uint8_t ones = number % 10;      // Extract ones digit
@@ -206,7 +206,14 @@ void update_display(uint8_t number) {
        uint8_t tens_code = seven_segment_table[tens];  // Lookup segment code for tens digit
        uint8_t ones_code = seven_segment_table[ones];  // Lookup segment code for ones digit
 
-       write_tens_digit(tens_code);
+       // don't display padded 0
+       if (tens == 0)
+       {
+           // clear out any previous value in this case
+           clear_tens_digit();
+       } else {
+           write_tens_digit(tens_code);
+       }
        write_ones_digit(ones_code);
     }
 }
@@ -224,7 +231,7 @@ void write_ones_digit(uint8_t segments) {
     //common electrode high, everything else low for -1.5V across segments
     write_tcal9539_register(OUTPUT_PORT0_REG, 0x80);
     write_tcal9539_register(OUTPUT_PORT1_REG, 0x00);
-    delay(500);
+    delay(200);
 
     // write all
     //common electrode low, segments high for 1.5V across segments
@@ -233,7 +240,7 @@ void write_ones_digit(uint8_t segments) {
     write_tcal9539_register(CONFIG_PORT1_REG, ~segments);
     //common electrode low, segments high for 1.5V across segments
     write_tcal9539_register(OUTPUT_PORT1_REG, segments);
-    delay(500);
+    delay(700);
 
     // after updates put into input mode (high impedance)
     write_tcal9539_register(CONFIG_PORT1_REG, 0xFF);
@@ -247,17 +254,30 @@ void write_tens_digit(uint8_t segments) {
     write_tcal9539_register(CONFIG_PORT0_REG, 0x00);
     //common electrode high, everything else low for -1.5V across segments
     write_tcal9539_register(OUTPUT_PORT0_REG, 0x80);
-    delay(500);
+    delay(200);
 
     // write all
     //set common electrode and segments as outputs
     write_tcal9539_register(CONFIG_PORT0_REG, ~(BIT7 | segments));
     //common electrode low, segments high for 1.5V across segments
     write_tcal9539_register(OUTPUT_PORT0_REG, segments);
-    delay(500);
+    delay(700);
     // after updates put into input mode (high impedance)
     write_tcal9539_register(CONFIG_PORT0_REG, 0xFF);
 }
+
+void clear_tens_digit() {
+    //clear
+    //set to outputs
+    write_tcal9539_register(CONFIG_PORT0_REG, 0x00);
+    //common electrode high, everything else low for -1.5V across segments
+    write_tcal9539_register(OUTPUT_PORT0_REG, 0x80);
+    delay(200);
+
+    // after updates put into input mode (high impedance)
+    write_tcal9539_register(CONFIG_PORT0_REG, 0xFF);
+}
+
 
 /*******************************Driver/Patch Table Format*******************************/
 /*
