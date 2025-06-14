@@ -182,6 +182,7 @@ void process_event(const Event *event) {
             // Delayed response works with NFC Tools testing on Android
             // Would make it easier to indicate when display update is complete, don't have to poll
             RF13MTXF_L = 0x03;
+            delay(100); // browning out sometimes, see if this helps
             update_display(event->data);
             break;
         case EVENT_TIMER:
@@ -210,6 +211,7 @@ void update_display(uint8_t number) {
        if (tens == 0)
        {
            // clear out any previous value in this case
+           // TODO: only do this if needed, will be switching away from this way in future
            clear_tens_digit();
        } else {
            write_tens_digit(tens_code);
@@ -233,6 +235,16 @@ void write_ones_digit(uint8_t segments) {
     write_tcal9539_register(OUTPUT_PORT1_REG, 0x00);
     delay(200);
 
+    // after updates put into input mode (high impedance)
+    write_tcal9539_register(CONFIG_PORT1_REG, 0xFF);
+    write_tcal9539_register(CONFIG_PORT0_REG, 0xFF);
+    // give time for caps to charge
+    delay(100);
+    // common electrode is on PORT0
+    //set com to output, everything else to input
+    write_tcal9539_register(CONFIG_PORT0_REG, 0x7F);
+
+
     // write all
     //common electrode low, segments high for 1.5V across segments
     write_tcal9539_register(OUTPUT_PORT0_REG, 0x00);
@@ -240,12 +252,13 @@ void write_ones_digit(uint8_t segments) {
     write_tcal9539_register(CONFIG_PORT1_REG, ~segments);
     //common electrode low, segments high for 1.5V across segments
     write_tcal9539_register(OUTPUT_PORT1_REG, segments);
-    delay(700);
+    delay(700); // was 700
+    delay(200); // timer limit?
 
     // after updates put into input mode (high impedance)
     write_tcal9539_register(CONFIG_PORT1_REG, 0xFF);
     write_tcal9539_register(CONFIG_PORT0_REG, 0xFF);
-
+    delay(100); // allow time for caps to charge before proceeding
 }
 
 void write_tens_digit(uint8_t segments) {
@@ -262,8 +275,10 @@ void write_tens_digit(uint8_t segments) {
     //common electrode low, segments high for 1.5V across segments
     write_tcal9539_register(OUTPUT_PORT0_REG, segments);
     delay(700);
+    delay(200); // timer limit?
     // after updates put into input mode (high impedance)
     write_tcal9539_register(CONFIG_PORT0_REG, 0xFF);
+    delay(100); // allow time for caps to charge before proceeding
 }
 
 void clear_tens_digit() {
@@ -276,6 +291,7 @@ void clear_tens_digit() {
 
     // after updates put into input mode (high impedance)
     write_tcal9539_register(CONFIG_PORT0_REG, 0xFF);
+    delay(100); // allow time for caps to charge before proceeding
 }
 
 
